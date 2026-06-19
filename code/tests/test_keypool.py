@@ -60,19 +60,34 @@ class TestKeyPoolRotation:
         # current index advances; still have a key
         assert pool.has_key()
 
-    def test_rotate_past_last_key_raises(self):
+    def test_rotate_past_last_rewinds_via_current(self):
+        # New semantics: rotate past end doesn't kill the key (only daily-quota
+        # marks a key dead). current() rewinds to the first live key.
         pool = KeyPool(["keyA"])
         pool.rotate()
+        assert pool.has_key() is True  # key not dead, just cursor past end
+        c = pool.current()  # rewinds to 0
+        assert c is not None
+        assert pool.current_index() == 0
+
+    def test_mark_dead_exhausts_pool(self):
+        pool = KeyPool(["keyA"])
+        pool.mark_dead(0)
         assert pool.has_key() is False
         with pytest.raises(KeyExhausted):
             pool.current()
 
-    def test_two_keys_allow_two_rotations(self):
+    def test_mark_one_dead_other_still_live(self):
         pool = KeyPool(["keyA", "keyB"])
-        assert pool.has_key()
-        pool.rotate()
-        assert pool.has_key()
-        pool.rotate()
+        pool.mark_dead(0)
+        assert pool.has_key() is True
+        pool.reset()
+        assert pool.current_index() == 1  # skips dead key 0
+
+    def test_all_dead_is_exhausted(self):
+        pool = KeyPool(["keyA", "keyB"])
+        pool.mark_dead(0)
+        pool.mark_dead(1)
         assert pool.has_key() is False
 
     def test_empty_pool_is_exhausted(self):
@@ -88,3 +103,15 @@ class TestKeyPoolRotation:
         assert pool.current_index() == 1
         pool.rotate()
         assert pool.current_index() == 2
+
+    def test_reset_rewinds_to_first_live_key(self):
+        pool = KeyPool(["keyA", "keyB", "keyC"])
+        pool.mark_dead(0)
+        pool.reset()
+        assert pool.current_index() == 1
+
+    def test_live_count(self):
+        pool = KeyPool(["keyA", "keyB", "keyC"])
+        assert pool.live_count() == 3
+        pool.mark_dead(1)
+        assert pool.live_count() == 2

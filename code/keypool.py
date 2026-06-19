@@ -33,29 +33,61 @@ def is_daily_quota_429(err) -> bool:
 
 
 class KeyPool:
-    """Holds genai clients built from a list of API keys; rotates on exhaustion."""
+    """Holds genai clients built from a list of API keys; rotates on exhaustion.
+
+    A key that hits the DAILY quota (PerDay) is marked permanently dead for the
+    process lifetime (it won't recover for ~24h). Transient per-minute 429s and
+    503s are handled by the retry layer, not by permanent rotation. ``reset()``
+    returns the cursor to the first non-dead key, so each new call/claim can
+    retry keys that were only transiently rate-limited.
+    """
 
     def __init__(self, keys: List[str]):
         self._keys = [k for k in keys if k]
         self._clients = [genai.Client(api_key=k) for k in self._keys]
         self._idx = 0
+        self._dead: set = set()  # indices of daily-exhausted keys
 
     def has_key(self) -> bool:
-        return self._idx < len(self._clients)
+        # Any non-dead key remaining?
+        return any(i not in self._dead for i in range(len(self._clients)))
 
     def current_index(self) -> int:
         return self._idx
 
     def current(self):
         if not self.has_key():
-            raise KeyExhausted("no API keys remain with available quota")
+            raise KeyExhausted("no API keys remain with available daily quota")
+        if self._idx >= len(self._clients) or self._idx in self._dead:
+            self.reset()  # rewind to the first live key
+        if self._idx >= len(self._clients):
+            raise KeyExhausted("no API keys remain with available daily quota")
         return self._clients[self._idx]
 
+    def mark_dead(self, idx: int) -> None:
+        """Mark a key's DAILY quota permanently exhausted for this process."""
+        self._dead.add(idx)
+
+    def is_dead(self, idx: int) -> bool:
+        return idx in self._dead
+
     def rotate(self) -> None:
+        """Advance to the next non-dead key (for transient failures)."""
         self._idx += 1
+        while self._idx < len(self._clients) and self._idx in self._dead:
+            self._idx += 1
+
+    def reset(self) -> None:
+        """Rewind to the first non-dead key. Call at the start of each claim."""
+        self._idx = 0
+        while self._idx < len(self._clients) and self._idx in self._dead:
+            self._idx += 1
 
     def __len__(self) -> int:
         return len(self._clients)
+
+    def live_count(self) -> int:
+        return len(self._clients) - len(self._dead)
 
 
 def load_keys_from_env() -> List[str]:

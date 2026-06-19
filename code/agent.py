@@ -75,34 +75,52 @@ def is_retryable(err: Exception) -> bool:
 
 
 def _backoff_sleep(attempt: int) -> None:
-    """Exponential backoff: multiplier 2, min SLEEP_BETWEEN_CALLS, max 60s.
+    """Exponential backoff: multiplier 2, min SLEEP_BETWEEN_CALLS, max 90s.
 
-    attempt is 0-based (first retry waits min). Capped at 60s per the contract.
+    attempt is 0-based (first retry waits min). Capped at 90s to ride out
+    transient 503 demand spikes (which can last several minutes).
     """
-    delay = min(60.0, SLEEP_BETWEEN_CALLS * (2 ** attempt))
+    delay = min(90.0, SLEEP_BETWEEN_CALLS * (2 ** attempt))
     time.sleep(delay)
 
 
-def call_with_retry(fn, what: str = "model call"):
-    """Call ``fn`` with retry on retryable errors (up to MAX_RETRIES attempts).
+def _is_server_error(err) -> bool:
+    """True if err is a 5xx APIError (e.g. 503 demand spike)."""
+    try:
+        return isinstance(err, genai_errors.APIError) and 500 <= err.code < 600
+    except Exception:
+        return False
 
-    Non-retryable errors propagate immediately. Raises the last error if all
-    attempts fail. A DAILY-quota 429 is treated as non-retryable (it won't
-    recover within the retry window; rotation should handle it).
+
+# Server-error (503) spikes can persist longer than per-minute 429s, so allow
+# more attempts with the longer backoff to survive a multi-minute outage.
+SERVER_ERROR_RETRIES = 7
+
+
+def call_with_retry(fn, what: str = "model call"):
+    """Call ``fn`` with retry on retryable errors.
+
+    Up to MAX_RETRIES (5) for normal retryables; up to SERVER_ERROR_RETRIES (7)
+    when the failure is a 503/5xx, to ride out demand spikes. A DAILY-quota 429
+    is non-retryable (rotation handles it).
     """
     last_err = None
-    for attempt in range(MAX_RETRIES):
+    attempt = 0
+    while True:
         try:
             return fn()
         except Exception as err:  # noqa: BLE001 - filter below
-            # Daily-quota exhaustion: do not retry, let rotation handle it.
             if is_daily_quota_429(err):
                 raise
             if not is_retryable(err):
                 raise
             last_err = err
+            attempt += 1
+            max_attempts = SERVER_ERROR_RETRIES if _is_server_error(err) else MAX_RETRIES
+            if attempt >= max_attempts:
+                raise
             logger.warning("%s attempt %d/%d failed (%s); retrying",
-                           what, attempt + 1, MAX_RETRIES, err)
+                           what, attempt, max_attempts, err)
             _backoff_sleep(attempt)
     raise last_err
 
@@ -120,29 +138,35 @@ def set_key_pool(pool: KeyPool) -> None:
 def call_with_rotation(make_call, what: str = "model call"):
     """Call make_call(client) with retry + key rotation on daily-quota 429.
 
-    make_call takes a genai.Client and returns the result (or raises).
-    Rotates through every key in the pool before giving up.
+    make_call takes a genai.Client and returns the result (or raises). A key
+    that hits the DAILY quota is marked permanently dead and the next live key
+    is tried. Transient (per-minute/503) failures are retried in place. Resets
+    the cursor at the start so each call can retry keys that were only
+    transiently rate-limited on a previous call.
     """
     global _key_pool
     if _key_pool is None:
-        # No pool: legacy single-client path. Build one client and use it.
         client = build_client()
         return call_with_retry(lambda: make_call(client), what=what)
 
+    _key_pool.reset()  # rewind to first live key
     while _key_pool.has_key():
         client = _key_pool.current()
+        idx = _key_pool.current_index()
         try:
             return call_with_retry(lambda: make_call(client), what=what)
         except Exception as err:
-            if is_daily_quota_429(err) and _key_pool.has_key():
+            if is_daily_quota_429(err):
                 logger.warning("%s: daily quota exhausted on key index %d; "
-                               "rotating to next key.", what, _key_pool.current_index())
-                _key_pool.rotate()
+                               "marking dead and rotating.", what, idx)
+                _key_pool.mark_dead(idx)
+                _key_pool.reset()
                 if not _key_pool.has_key():
-                    raise KeyExhausted("all keys exhausted their daily quota") from err
+                    raise KeyExhausted(
+                        "all keys exhausted their daily quota") from err
                 continue
             raise
-    raise KeyExhausted("no API keys remain with available quota")
+    raise KeyExhausted("no API keys remain with available daily quota")
 
 
 def _throttle():
