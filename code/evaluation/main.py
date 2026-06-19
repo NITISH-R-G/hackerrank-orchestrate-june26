@@ -1,6 +1,7 @@
+"""Metrics evaluation module."""
 import csv
-import json
 from pathlib import Path
+
 
 def evaluate_predictions(predictions_path: Path, truth_path: Path) -> dict:
     """Evaluate accuracy of predictions against ground truth."""
@@ -35,11 +36,16 @@ def evaluate_predictions(predictions_path: Path, truth_path: Path) -> dict:
         if pred.get('severity') == t.get('severity'):
             metrics['correct_severity'] += 1
 
-    if metrics['total'] > 0:
-        metrics['accuracy_claim_status'] = metrics['correct_claim_status'] / metrics['total']
-        metrics['accuracy_issue_type'] = metrics['correct_issue_type'] / metrics['total']
-        metrics['accuracy_object_part'] = metrics['correct_object_part'] / metrics['total']
-        metrics['accuracy_severity'] = metrics['correct_severity'] / metrics['total']
+    total = metrics['total']
+    if total > 0:
+        metrics['accuracy_claim_status'] = (
+            metrics['correct_claim_status'] / total
+        )
+        metrics['accuracy_issue_type'] = metrics['correct_issue_type'] / total
+        metrics['accuracy_object_part'] = (
+            metrics['correct_object_part'] / total
+        )
+        metrics['accuracy_severity'] = metrics['correct_severity'] / total
     else:
         metrics['accuracy_claim_status'] = 0.0
         metrics['accuracy_issue_type'] = 0.0
