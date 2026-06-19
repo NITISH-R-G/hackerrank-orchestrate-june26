@@ -167,16 +167,18 @@ Emitted as lowercase strings `true` / `false`.
 
 These are logical rules the postprocessor MUST enforce after the model
 returns (see `behavior_spec.md` scenarios 7–8 and `agent_contract.md`
-postprocessor rules):
+postprocessor rules). They are **data-grounded**: only invariants that hold
+across the labeled `sample_claims.csv` are enforced.
 
-1. If `valid_image = false` → `evidence_standard_met = false` and
-   `claim_status ≠ supported` (must be `contradicted` or
-   `not_enough_information`).
-2. If `evidence_standard_met = false` → `claim_status ≠ supported`.
-3. If `claim_status = supported` → `valid_image = true` AND
+1. If `claim_status = supported` → `valid_image = true` AND
    `evidence_standard_met = true`.
-4. If `claim_status = contradicted` and the part is visible with no issue,
-   `issue_type = none`.
+2. If `evidence_standard_met = false` → `claim_status ≠ supported`.
+3. If `valid_image = false` → `claim_status ≠ supported`. Note:
+   `evidence_standard_met` is **not** forced to `false` here (a
+   non-original/invalid-as-evidence image can still be clear enough to
+   contradict a claim — see `user_008`).
+4. If `claim_status = contradicted` and the relevant part is visible with no
+   issue, `issue_type = none`.
 5. `supporting_image_ids` ⊆ image IDs parsed from this row's `image_paths`,
    unless it is the literal `none`.
 

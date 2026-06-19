@@ -99,8 +99,16 @@
 
 **Given** `valid_image` is determined to be `false`
 **Then**
-- `evidence_standard_met` MUST be `false`
 - `claim_status` MUST NOT be `supported` (must be `contradicted` or `not_enough_information`)
+- `evidence_standard_met` is **not forced** to `false`.
+
+> **Data-grounded refinement.** Labeled `sample_claims.csv` contains rows
+> where `valid_image = false` yet `evidence_standard_met = true` and
+> `claim_status = contradicted` (e.g. a screenshot/non-original image that is
+> still clear enough to conclude the claim mismatches). Therefore the only
+> invariant the postprocessor enforces is "not supported". An earlier draft of
+> this scenario asserted `evidence_standard_met` MUST be `false`; that is
+> **refuted** by the ground-truth distribution and is NOT enforced.
 
 ---
 
