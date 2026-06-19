@@ -115,6 +115,25 @@ def _pred_dicts_for_scoring(preds: list) -> list:
     return out
 
 
+def select_winner(results: dict, strategies=("single", "two")) -> str:
+    """Pick the winning strategy by mean accuracy; ties go to two-pass.
+
+    Pure function — no I/O — so it is unit-testable. Used by run_evaluation
+    and the --rescore path so they share identical selection logic.
+    """
+    strat_results = {k: v for k, v in results.items() if k in strategies}
+    if len(strat_results) == 2:
+        a, b = strategies[0], strategies[1]
+        if strat_results[a].get("mean_accuracy", 0) > strat_results[b].get("mean_accuracy", 0):
+            return a
+        if strat_results[b].get("mean_accuracy", 0) > strat_results[a].get("mean_accuracy", 0):
+            return b
+        return "two" if "two" in strategies else a
+    if strat_results:
+        return max(strat_results, key=lambda k: strat_results[k].get("mean_accuracy", 0))
+    return "two" if "two" in strategies else "single"
+
+
 def run_evaluation(limit=None, strategies=("single", "two")) -> dict:
     claims, history, evidence = load_all_data(use_sample=True)
     gt = _gt_dicts(claims)
@@ -135,19 +154,9 @@ def run_evaluation(limit=None, strategies=("single", "two")) -> dict:
               f"calls={stats}  runtime={elapsed:.1f}s")
 
     # Auto-select winner: higher mean accuracy; tie -> two-pass.
-    if len(results) == 2:
-        a, b = strategies
-        if results[a]["mean_accuracy"] > results[b]["mean_accuracy"]:
-            winner = a
-        elif results[b]["mean_accuracy"] > results[a]["mean_accuracy"]:
-            winner = b
-        else:
-            winner = "two" if "two" in strategies else a
-    else:
-        winner = max(results, key=lambda k: results[k]["mean_accuracy"])
-    results["winner"] = winner
+    results["winner"] = select_winner(results, strategies)
     results["limit"] = limit
-    print(f"\n=== WINNER: {winner} ===")
+    print(f"\n=== WINNER: {results['winner']} ===")
     return results
 
 
@@ -170,10 +179,7 @@ def main(argv=None) -> int:
                 return 1
             df = pd.read_csv(path)
             results[strat] = summarize(gt, _pred_dicts_for_scoring(df.to_dict("records")))
-        results["winner"] = max(
-            ("single", "two"),
-            key=lambda k: results[k]["mean_accuracy"],
-        )
+        results["winner"] = select_winner(results)
     else:
         limit = None if args.full else (args.limit if args.limit else 2)
         results = run_evaluation(limit=limit)

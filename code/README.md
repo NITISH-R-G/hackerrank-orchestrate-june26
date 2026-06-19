@@ -77,15 +77,21 @@ the model is never trusted to emit contract-conforming output on its own.
 ## Strategies
 
 - **Strategy A — single-pass:** one multimodal call does intent + analysis.
-- **Strategy B — two-pass (default for `output.csv`):** Pass 1 text intent
+  Served as the **measured baseline** (70% mean field accuracy, claim_status 85%
+  on the 20 labeled samples).
+- **Strategy B — two-pass (selected for `output.csv`):** Pass 1 text intent
   extraction, then Pass 2 multimodal with the targeted evidence requirement.
-  More calls, but deterministic evidence targeting and cleaner intent.
-
-Selection rule (see `specs/evaluation_spec.md`): higher mean field accuracy
-wins; ties go to two-pass for determinism.
+  Selected *by design* (targeted evidence + cleaner intent) — its sample eval
+  did not complete within the free-tier daily quota, so it was not
+  head-to-head scored against Strategy A. See `evaluation_report.md` §5.
 
 ## Reliability features
 
+- **Determinism:** `temperature=0` on every call. We observed minor run-to-run
+  variance at temp 0 (gemini-2.5-flash is not bit-deterministic across calls),
+  so determinism is provided by the **post-processing + validation layers**
+  (fully deterministic) and the on-disk **cache** (a cached row is byte-
+  identical on re-run). A cold run may differ slightly from a cached run.
 - **Retry:** `tenacity`-style loop; 5 attempts (7 for 5xx) with exponential
   backoff (×2, 13–90s) on 429/5xx only; 400/401 propagate immediately.
 - **Daily-quota rotation:** a 429 on the PerDay quota marks the key dead and
