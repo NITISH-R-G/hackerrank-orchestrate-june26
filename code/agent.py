@@ -33,6 +33,7 @@ from prompts import (
 from schema import ClaimAnalysis, ClaimIntentExtraction
 from image_utils import image_id_from_path
 from validator import find_inconsistencies, force_fix
+from keypool import KeyPool, KeyExhausted, is_daily_quota_429
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,50 @@ def call_with_retry(fn, what: str = "model call"):
                            what, attempt + 1, MAX_RETRIES, err)
             _backoff_sleep(attempt)
     raise last_err
+
+
+# --- Key pool (optional): when set, rotate keys on a daily-quota 429. ---
+_key_pool: KeyPool = None
+
+
+def set_key_pool(pool: KeyPool) -> None:
+    """Install a key pool so daily-quota 429s rotate to the next key."""
+    global _key_pool
+    _key_pool = pool
+
+
+def _client_for_call():
+    """Return the current client: from the pool if set, else the legacy single."""
+    if _key_pool is not None and _key_pool.has_key():
+        return _key_pool.current()
+    return None  # callers pass an explicit client
+
+
+def call_with_rotation(make_call, what: str = "model call"):
+    """Call make_call(client) with retry + key rotation on daily-quota 429.
+
+    make_call takes a genai.Client and returns the result (or raises).
+    Rotates through every key in the pool before giving up.
+    """
+    global _key_pool
+    if _key_pool is None:
+        # No pool: legacy single-client path; caller's client is used via closure.
+        return call_with_retry(make_call, what=what)
+
+    while _key_pool.has_key():
+        client = _key_pool.current()
+        try:
+            return call_with_retry(lambda: make_call(client), what=what)
+        except Exception as err:
+            if is_daily_quota_429(err) and _key_pool.has_key():
+                logger.warning("%s: daily quota exhausted on key index %d; "
+                               "rotating to next key.", what, _key_pool.current_index())
+                _key_pool.rotate()
+                if not _key_pool.has_key():
+                    raise KeyExhausted("all keys exhausted their daily quota") from err
+                continue
+            raise
+    raise KeyExhausted("no API keys remain with available quota")
 
 
 def _throttle():
@@ -187,13 +232,14 @@ def _run_pass1(client, user_claim: str, claim_object: str) -> Dict:
 
     def go():
         _throttle()
-        resp = client.models.generate_content(
+        c = _client_for_call() or client
+        resp = c.models.generate_content(
             model=MODEL_NAME, contents=user_p, config=cfg,
         )
         _record_usage(resp)
         return _extract_json(resp)
 
-    return call_with_retry(go, what="Pass 1")
+    return call_with_rotation(go, what="Pass 1")
 
 
 # ---------------------------------------------------------------------------
@@ -230,13 +276,14 @@ def _run_pass2(client, *, claim_object, user_claim, claimed_damage_description,
 
     def go():
         _throttle()
-        resp = client.models.generate_content(
+        c = _client_for_call() or client
+        resp = c.models.generate_content(
             model=MODEL_NAME, contents=contents, config=cfg,
         )
         _record_usage(resp)
         return _extract_json(resp)
 
-    return call_with_retry(go, what="Pass 2")
+    return call_with_rotation(go, what="Pass 2")
 
 
 # ---------------------------------------------------------------------------
@@ -266,13 +313,14 @@ def _run_single_pass(client, *, claim_object, user_claim, evidence_requirement,
 
     def go():
         _throttle()
-        resp = client.models.generate_content(
+        c = _client_for_call() or client
+        resp = c.models.generate_content(
             model=MODEL_NAME, contents=contents, config=cfg,
         )
         _record_usage(resp)
         return _extract_json(resp)
 
-    return call_with_retry(go, what="Single pass")
+    return call_with_rotation(go, what="Single pass")
 
 
 def analyze_claim_single_pass_raw(client, *, user_claim, claim_object,

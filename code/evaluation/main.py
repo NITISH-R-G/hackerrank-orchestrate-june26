@@ -55,6 +55,14 @@ def _run_strategy(strategy: str, df: pd.DataFrame, history_df, evidence_df,
                   limit=None) -> list:
     """Run one strategy over the sample rows; return (preds, stats, elapsed)."""
     client = agent.build_client()
+    # Install a key pool for rotation across the 20/day-per-key free-tier quota.
+    try:
+        from keypool import build_pool
+        agent.set_key_pool(build_pool())
+        pool_size = len(build_pool())
+        print(f"  key pool size: {pool_size}")
+    except Exception as e:
+        print(f"  (single-key mode: {e})")
     agent.reset_stats()
     n = len(df) if limit is None else min(limit, len(df))
     preds = []

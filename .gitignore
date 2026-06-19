@@ -15,6 +15,7 @@ venv/
 code/.cache/
 code/evaluation/predictions/
 code/evaluation/summary.json
+code/evaluation/eval_run.log
 output.csv
 
 # OS
