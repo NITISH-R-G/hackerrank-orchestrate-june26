@@ -238,6 +238,67 @@ class TestCacheShortCircuit:
         assert out["claim_status"] == "supported"
 
 
+class TestConsistencyRerun:
+    def test_rerun_once_when_inconsistent(self, mocker):
+        """An inconsistent first output triggers one re-run."""
+        mocker.patch.object(agent, "SLEEP_BETWEEN_CALLS", 0)
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"claim_status": "supported", "issue_type": "none",
+                        "evidence_standard_met": True, "valid_image": True,
+                        "supporting_image_ids": "img_1", "severity": "high",
+                        "risk_flags": "none", "evidence_standard_met_reason": "c",
+                        "claim_status_justification": "c", "object_part": "front_bumper"}
+            return {"claim_status": "supported", "issue_type": "dent",
+                    "evidence_standard_met": True, "valid_image": True,
+                    "supporting_image_ids": "img_1", "severity": "medium",
+                    "risk_flags": "none", "evidence_standard_met_reason": "c",
+                    "claim_status_justification": "c", "object_part": "front_bumper"}
+
+        out = agent._consistency_rerun(flaky(), flaky)
+        assert calls["n"] >= 1
+        assert out["issue_type"] == "dent"
+
+    def test_force_fix_when_rerun_still_inconsistent(self, mocker):
+        """If the re-run is also inconsistent, force_fix repairs deterministically."""
+        mocker.patch.object(agent, "SLEEP_BETWEEN_CALLS", 0)
+        bad = {"claim_status": "supported", "issue_type": "none",
+               "evidence_standard_met": True, "valid_image": True,
+               "supporting_image_ids": "img_1", "severity": "high",
+               "risk_flags": "none", "evidence_standard_met_reason": "c",
+               "claim_status_justification": "c", "object_part": "front_bumper"}
+        out = agent._consistency_rerun(dict(bad), lambda: dict(bad))
+        assert out["claim_status"] != "supported"
+        assert out["severity"] == "unknown"
+
+
+class TestStrategyDispatch:
+    def test_single_strategy_calls_single_pass(self, mocker):
+        mocker.patch.object(agent, "analyze_claim_single_pass",
+                            lambda *a, **kw: {"claim_status": "SINGLE"})
+        mocker.patch.object(agent, "analyze_claim",
+                            lambda *a, **kw: {"claim_status": "TWO"})
+        out = agent.analyze_claim_by_strategy(
+            client=None, strategy="single", user_claim="x",
+            claim_object="car", image_paths="a/img_1.jpg",
+            evidence_requirement="y", history_risk=False)
+        assert out["claim_status"] == "SINGLE"
+
+    def test_two_strategy_calls_two_pass(self, mocker):
+        mocker.patch.object(agent, "analyze_claim_single_pass",
+                            lambda *a, **kw: {"claim_status": "SINGLE"})
+        mocker.patch.object(agent, "analyze_claim",
+                            lambda *a, **kw: {"claim_status": "TWO"})
+        out = agent.analyze_claim_by_strategy(
+            client=None, strategy="two", user_claim="x",
+            claim_object="car", image_paths="a/img_1.jpg",
+            evidence_requirement="y", history_risk=False)
+        assert out["claim_status"] == "TWO"
+
+
 # ===================== LIVE integration test =====================
 
 @pytest.mark.live

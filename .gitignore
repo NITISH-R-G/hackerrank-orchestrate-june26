@@ -13,6 +13,8 @@ venv/
 
 # Local cache / generated artifacts
 code/.cache/
+code/evaluation/predictions/
+code/evaluation/summary.json
 output.csv
 
 # OS

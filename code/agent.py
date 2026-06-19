@@ -27,10 +27,12 @@ from config import (
 )
 from cache import cache_key, cache_get, cache_set
 from prompts import (
-    PASS1_SYSTEM, PASS2_SYSTEM, pass1_user_prompt, pass2_user_prompt,
+    PASS1_SYSTEM, PASS2_SYSTEM, SINGLE_PASS_SYSTEM, pass1_user_prompt,
+    pass2_user_prompt, single_pass_user_prompt,
 )
 from schema import ClaimAnalysis, ClaimIntentExtraction
 from image_utils import image_id_from_path
+from validator import find_inconsistencies, force_fix
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,15 @@ def call_with_retry(fn, what: str = "model call"):
                            what, attempt + 1, MAX_RETRIES, err)
             _backoff_sleep(attempt)
     raise last_err
+
+
+def _throttle():
+    """Sleep SLEEP_BETWEEN_CALLS before every network request (5 RPM free tier).
+
+    Called at the start of each generate_content closure so back-to-back calls
+    stay under the per-minute request quota, reducing 429s.
+    """
+    time.sleep(SLEEP_BETWEEN_CALLS)
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +186,7 @@ def _run_pass1(client, user_claim: str, claim_object: str) -> Dict:
     )
 
     def go():
+        _throttle()
         resp = client.models.generate_content(
             model=MODEL_NAME, contents=user_p, config=cfg,
         )
@@ -217,6 +229,7 @@ def _run_pass2(client, *, claim_object, user_claim, claimed_damage_description,
     )
 
     def go():
+        _throttle()
         resp = client.models.generate_content(
             model=MODEL_NAME, contents=contents, config=cfg,
         )
@@ -227,8 +240,104 @@ def _run_pass2(client, *, claim_object, user_claim, claimed_damage_description,
 
 
 # ---------------------------------------------------------------------------
+# Strategy A — single-pass multimodal analysis
+# ---------------------------------------------------------------------------
+
+def _run_single_pass(client, *, claim_object, user_claim, evidence_requirement,
+                     history_risk,
+                     images: List[Tuple[str, Image.Image]]) -> Dict:
+    """Strategy A: one multimodal call does intent + analysis together."""
+    image_ids = [image_id_from_path(p) for p, _ in images]
+    user_p = single_pass_user_prompt(
+        claim_object=claim_object, user_claim=user_claim,
+        evidence_requirement=evidence_requirement,
+        history_risk=history_risk, image_ids=image_ids,
+    )
+    contents: List = [user_p]
+    for _, img in images:
+        png = _pil_to_png_bytes(img)
+        contents.append(types.Part.from_bytes(data=png, mime_type="image/png"))
+    cfg = types.GenerateContentConfig(
+        temperature=TEMPERATURE,
+        system_instruction=SINGLE_PASS_SYSTEM,
+        response_mime_type="application/json",
+        response_schema=ClaimAnalysis,
+    )
+
+    def go():
+        _throttle()
+        resp = client.models.generate_content(
+            model=MODEL_NAME, contents=contents, config=cfg,
+        )
+        _record_usage(resp)
+        return _extract_json(resp)
+
+    return call_with_retry(go, what="Single pass")
+
+
+def analyze_claim_single_pass_raw(client, *, user_claim, claim_object,
+                                  images, evidence_requirement,
+                                  history_risk) -> Dict:
+    """Strategy A entry point: single-pass with cache + safe default + re-run-once."""
+    from image_utils import image_hash as _ih
+    img_hashes = [_ih(_pil_to_png_bytes(im)) for _, im in images]
+    key = cache_key(
+        MODEL_NAME, TEMPERATURE, SINGLE_PASS_SYSTEM,
+        single_pass_user_prompt(
+            claim_object=claim_object, user_claim=user_claim,
+            evidence_requirement=evidence_requirement, history_risk=history_risk,
+            image_ids=[image_id_from_path(p) for p, _ in images],
+        ), img_hashes,
+    )
+    cached = cache_get(key)
+    if cached is not None:
+        stats["cache_hits"] += 1
+        return cached
+    try:
+        out = _run_single_pass(
+            client, claim_object=claim_object, user_claim=user_claim,
+            evidence_requirement=evidence_requirement, history_risk=history_risk,
+            images=images,
+        )
+        stats["pass2_calls"] += 1  # count as a multimodal call for ops
+        # re-run-once on inconsistency, then force-fix
+        out = _consistency_rerun(out, lambda: _run_single_pass(
+            client, claim_object=claim_object, user_claim=user_claim,
+            evidence_requirement=evidence_requirement, history_risk=history_risk,
+            images=images,
+        ))
+        cache_set(key, out)
+        return out
+    except Exception as err:
+        stats["pass2_failures"] += 1
+        logger.warning("Single pass failed (%s); returning safe default.", err)
+        safe = safe_default_analysis(history_risk)
+        cache_set(key, safe)
+        return safe
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
+
+def _consistency_rerun(out: Dict, rerun_fn) -> Dict:
+    """If the output is inconsistent, re-run Pass 2 once; then force-fix.
+
+    Per the user's Sprint 5 choice: re-run the reasoning step ONCE on
+    detected inconsistency, then deterministically force-fix any remaining
+    issue. Bounded: at most one extra model call.
+    """
+    if not find_inconsistencies(out):
+        return out
+    try:
+        retry_out = rerun_fn()
+        if not find_inconsistencies(retry_out):
+            return retry_out
+        out = retry_out
+    except Exception as err:
+        logger.warning("Consistency re-run failed (%s); force-fixing prior output.", err)
+    return force_fix(out)
+
 
 def analyze_claim_raw(client, *, user_claim: str, claim_object: str,
                       images: List[Tuple[str, Image.Image]],
@@ -285,6 +394,14 @@ def analyze_claim_raw(client, *, user_claim: str, claim_object: str,
             history_risk=history_risk, images=images,
         )
         stats["pass2_calls"] += 1
+        # re-run-once on inconsistency, then force-fix
+        out = _consistency_rerun(out, lambda: _run_pass2(
+            client, claim_object=claim_object, user_claim=user_claim,
+            claimed_damage_description=claimed_damage_description,
+            issue_family=issue_family,
+            evidence_requirement=evidence_requirement,
+            history_risk=history_risk, images=images,
+        ))
         cache_set(key, out)
         return out
     except Exception as err:
@@ -312,3 +429,33 @@ def analyze_claim(client, *, user_claim, claim_object, image_paths: str,
         history_risk=history_risk,
     )
     return postprocess(raw, claim_object, image_paths, history_risk)
+
+
+def analyze_claim_single_pass(client, *, user_claim, claim_object,
+                              image_paths: str, evidence_requirement: str,
+                              history_risk: bool) -> Dict:
+    """Strategy A convenience wrapper: load images, single-pass, postprocess."""
+    from image_utils import parse_image_paths, load_images
+    from postprocessor import postprocess
+
+    rel_paths = parse_image_paths(image_paths)
+    images = load_images(rel_paths)
+    raw = analyze_claim_single_pass_raw(
+        client, user_claim=user_claim, claim_object=claim_object,
+        images=images, evidence_requirement=evidence_requirement,
+        history_risk=history_risk,
+    )
+    return postprocess(raw, claim_object, image_paths, history_risk)
+
+
+def analyze_claim_by_strategy(client, *, strategy: str, user_claim,
+                              claim_object, image_paths: str,
+                              evidence_requirement: str,
+                              history_risk: bool) -> Dict:
+    """Dispatch to Strategy A ('single') or B ('two'). Used by evaluation."""
+    fn = (analyze_claim_single_pass if strategy == "single"
+          else analyze_claim)
+    return fn(client, user_claim=user_claim, claim_object=claim_object,
+              image_paths=image_paths,
+              evidence_requirement=evidence_requirement,
+              history_risk=history_risk)

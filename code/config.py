@@ -16,7 +16,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 # --- Model / API behaviour ---
 MODEL_NAME = "gemini-2.5-flash"
 TEMPERATURE = 0
-SLEEP_BETWEEN_CALLS = 4.0   # seconds, to stay under ~15 RPM free tier
+SLEEP_BETWEEN_CALLS = 13.0  # seconds; free tier is 5 RPM for gemini-2.5-flash
 MAX_RETRIES = 5
 
 # --- Filesystem layout ---

@@ -121,13 +121,15 @@ def postprocess(analysis: Dict[str, Any], claim_object: str,
     # Parse the submitted image IDs once.
     submitted_ids = [image_id_from_path(p) for p in parse_image_paths(image_paths)]
 
-    allowed_parts = PARTS_MAP.get(claim_object, PARTS_MAP["car"])  # unknown object -> any, fallback safe
-
-    # --- Rule 1 & 2: enum + object-bound part ---
-    issue_type = _fuzzy_fix(a.get("issue_type"), VALID_ISSUE_TYPES, _FALLBACK["issue_type"])
-    severity = _fuzzy_fix(a.get("severity"), VALID_SEVERITY, _FALLBACK["severity"])
-    claim_status = _fuzzy_fix(a.get("claim_status"), VALID_CLAIM_STATUS, _FALLBACK["claim_status"])
-    object_part = _fuzzy_fix(a.get("object_part"), allowed_parts, _FALLBACK["object_part"])
+    # --- Rule 1 & 2: enum + object-bound part (alias-first normalization) ---
+    from normalizer import (
+        normalize_issue_type, normalize_severity, normalize_claim_status,
+        normalize_object_part, normalize_risk_flags as _norm_risk,
+    )
+    issue_type = normalize_issue_type(a.get("issue_type"))
+    severity = normalize_severity(a.get("severity"))
+    claim_status = normalize_claim_status(a.get("claim_status"))
+    object_part = normalize_object_part(a.get("object_part"), claim_object)
 
     # --- Rule 3 & 4: risk flags + history injection ---
     risk_flags = _clean_risk_flags(a.get("risk_flags"), history_risk)
@@ -144,18 +146,10 @@ def postprocess(analysis: Dict[str, Any], claim_object: str,
     claim_status_justification = _fill_str(a.get("claim_status_justification"),
                                            "No justification provided.")
 
-    # --- Invariants: supported requires valid_image AND evidence_met AND a supporting id ---
-    if claim_status == "supported":
-        if not valid_image or not evidence_standard_met or not has_supporting:
-            claim_status = "not_enough_information"
-    # evidence_standard_met False => not supported
-    if not evidence_standard_met and claim_status == "supported":
-        claim_status = "not_enough_information"
-    # valid_image False => not supported
-    if not valid_image and claim_status == "supported":
-        claim_status = "not_enough_information"
-
-    return {
+    # --- Invariants (data-grounded): delegate to the validator's force_fix,
+    # the single source of truth for consistency rules. ---
+    from validator import force_fix
+    result = {
         "evidence_standard_met": evidence_standard_met,
         "evidence_standard_met_reason": evidence_standard_met_reason,
         "risk_flags": risk_flags,
@@ -167,3 +161,4 @@ def postprocess(analysis: Dict[str, Any], claim_object: str,
         "valid_image": valid_image,
         "severity": severity,
     }
+    return force_fix(result)

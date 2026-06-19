@@ -72,6 +72,64 @@ PASS2_SYSTEM = (
     "matching the schema."
 )
 
+# Strategy A uses the same reviewer persona; only the prompt assembly differs.
+SINGLE_PASS_SYSTEM = PASS2_SYSTEM
+
+
+def single_pass_user_prompt(
+    *,
+    claim_object: str,
+    user_claim: str,
+    evidence_requirement: str,
+    history_risk: bool,
+    image_ids: List[str],
+) -> str:
+    """Strategy A: one call does intent extraction + analysis together.
+
+    Same strict-enum/anti-hallucination body as pass2_user_prompt, but the
+    model must itself figure out the claimed damage from the raw conversation
+    (no extracted intent provided).
+    """
+    parts = _parts_for(claim_object)
+    history_line = (
+        "HISTORY RISK: true (context only — do NOT let it override the visual "
+        "evidence)." if history_risk else "HISTORY RISK: false."
+    )
+    return (
+        f"CLAIM OBJECT: {claim_object}\n"
+        f"IMAGE IDs SUBMITTED: {', '.join(image_ids) if image_ids else '(none)'}\n\n"
+        f"CUSTOMER CONVERSATION:\n{user_claim}\n\n"
+        f"EVIDENCE REQUIREMENT:\n{evidence_requirement}\n\n"
+        f"{history_line}\n\n"
+        "First, determine what damage the customer is claiming from the "
+        "conversation. Then analyze the attached images and decide the "
+        "following fields.\n\n"
+        "=== object_part (STRICT ENUM — never invent) ===\n"
+        f"Pick EXACTLY one from: {parts}\n"
+        "Map common descriptions to the canonical label BEFORE output:\n"
+        "  'back bumper'/'rear bumper' -> rear_bumper; 'front bumper' -> front_bumper;\n"
+        "  'rear side panel'/'side panel' -> quarter_panel; 'rear windshield'/'back glass' -> windshield;\n"
+        "  'back light'/'tail light' -> taillight; 'head light' -> headlight; 'mirror' -> side_mirror;\n"
+        "  'trunk' -> body. If no clear match, output 'unknown'.\n\n"
+        "=== issue_type (STRICT ENUM): one of [dent, scratch, crack, glass_shatter, broken_part, missing_part, torn_packaging, crushed_packaging, water_damage, stain, none, unknown] ===\n"
+        "Map: 'screen crack'->crack; 'water spill'->water_damage; 'shattered glass'->glass_shatter.\n\n"
+        "=== severity (STRICT, deterministic — be conservative) ===\n"
+        "  none=no damage (only if issue_type=none);\n"
+        "  low=minor cosmetic (light scratch, small/shallow dent) — default for a single scratch or small dent;\n"
+        "  medium=clearly visible localized damage — one distinct dent, one clear crack, one isolated broken component;\n"
+        "  high=SEVERE ONLY — large deformation across a panel, shattered glass, MULTIPLE damaged components, or function-impairing damage. A single dent/scratch is almost NEVER high.\n"
+        "  unknown=cannot determine. When unsure prefer the lower of two adjacent levels.\n\n"
+        f"=== claim_status (STRICT ENUM): one of {VALID_CLAIM_STATUS} ===\n"
+        f"=== risk_flags (semicolon-separated subset of {VALID_RISK_FLAGS}; exclude 'user_history_risk'; 'none' if none) ===\n\n"
+        "- valid_image: true unless blurry/corrupt (a screenshot can still be clear enough to contradict).\n"
+        "- evidence_standard_met: true if the set is sufficient to evaluate THIS claim.\n"
+        "- supporting_image_ids: subset of submitted IDs; 'none' only if none suffice.\n"
+        "- claim_status_justification: <=2 sentences citing image IDs.\n"
+        "- evidence_standard_met_reason: <=1 sentence.\n\n"
+        "DECISION RULES: supported=images show the claimed damage; contradicted=images show no damage OR a different issue (needs sufficient evidence); not_enough_information=cannot decide.\n"
+        "ANTI-HALLUCINATION: report ONLY visible damage; never invent parts/issues/severity; when uncertain prefer not_enough_information; history risk never changes claim_status."
+    )
+
 
 def pass2_user_prompt(
     *,
@@ -98,28 +156,68 @@ def pass2_user_prompt(
         f"ISSUE FAMILY: {issue_family}\n\n"
         f"EVIDENCE REQUIREMENT:\n{evidence_requirement}\n\n"
         f"{history_line}\n\n"
-        "Analyze the attached images and decide:\n"
-        f"- issue_type: one of {VALID_ISSUE_TYPES}\n"
-        f"- object_part: one of {parts}\n"
-        f"- claim_status: one of {VALID_CLAIM_STATUS}\n"
-        f"- severity: one of {VALID_SEVERITY}\n"
-        f"- risk_flags: semicolon-separated subset of {VALID_RISK_FLAGS} "
-        "(do NOT include 'user_history_risk' — it is added automatically). "
-        "Use 'none' if no flags apply.\n"
+        "Analyze the attached images and decide the following fields.\n\n"
+        "=== object_part (STRICT ENUM — never invent) ===\n"
+        f"Pick EXACTLY one from: {parts}\n"
+        "Map common descriptions to the canonical label BEFORE output:\n"
+        "  'back bumper' / 'rear bumper' -> rear_bumper;\n"
+        "  'front bumper' -> front_bumper;\n"
+        "  'rear side panel' / 'side panel' -> quarter_panel;\n"
+        "  'rear windshield' / 'back glass' -> windshield;\n"
+        "  'back light' / 'tail light' -> taillight;\n"
+        "  'head light' -> headlight;\n"
+        "  'mirror' -> side_mirror;\n"
+        "  'trunk' -> body (unless clearly the bumper).\n"
+        "If the visible part does not clearly match any label, output "
+        "'unknown'. NEVER output a word that is not in the list above.\n\n"
+        "=== issue_type (STRICT ENUM — never invent) ===\n"
+        f"Pick EXACTLY one from: {VALID_ISSUE_TYPES}\n"
+        "Map: 'screen crack' -> crack; 'water spill' -> water_damage; "
+        "'shattered glass' -> glass_shatter. Use 'none' only when the part is "
+        "visible and undamaged; 'unknown' only when it cannot be determined.\n\n"
+        "=== severity (STRICT, deterministic definitions — be conservative) ===\n"
+        f"Pick EXACTLY one from: {VALID_SEVERITY}\n"
+        "  - none: no damage present (only valid when issue_type=none).\n"
+        "  - low: minor cosmetic damage — a light surface scratch, a small/shallow "
+        "dent, a faint mark. Default for a single scratch or small dent.\n"
+        "  - medium: clearly visible localized damage — one distinct dent, one "
+        "clear crack, or one isolated broken component. Default for a single "
+        "clear dent or crack.\n"
+        "  - high: SEVERE damage ONLY — large deformation across a panel, "
+        "shattered glass, MULTIPLE damaged components, or damage that clearly "
+        "impairs function. A single dent or scratch is almost NEVER high; do "
+        "not use high unless the damage is clearly major/extensive.\n"
+        "  - unknown: cannot determine from the images. Do NOT guess.\n"
+        "When unsure between low and medium, prefer low; between medium and "
+        "high, prefer medium.\n\n"
+        f"=== claim_status (STRICT ENUM): one of {VALID_CLAIM_STATUS} ===\n"
+        f"=== risk_flags (semicolon-separated subset of {VALID_RISK_FLAGS}) ===\n"
+        "Do NOT include 'user_history_risk' (added automatically). Use 'none' "
+        "if no flags apply.\n\n"
         "- valid_image: true if the image set is usable for automated review "
-        "(not blurry/corrupt/screenshot). NOTE: a non-original image can still "
-        "be clear enough to contradict a claim.\n"
+        "(not blurry/corrupt). NOTE: a non-original/screenshot image can still "
+        "be clear enough to contradict a claim — set valid_image=false for "
+        "screenshots/non-original images, but that does NOT prevent "
+        "evidence_standard_met=true.\n"
         "- evidence_standard_met: true if the image set is sufficient to "
-        "evaluate THIS claim (even if the answer is 'no damage').\n"
+        "evaluate THIS claim (even if the answer is 'no damage' or 'wrong "
+        "damage'). False only when you genuinely cannot evaluate the claim.\n"
         "- supporting_image_ids: semicolon-separated subset of the submitted "
-        "image IDs that support your decision; 'none' if none suffice.\n"
+        "image IDs that support your decision; 'none' only if none suffice.\n"
         "- claim_status_justification: <=2 sentences, grounded in specific "
         "image IDs.\n"
         "- evidence_standard_met_reason: <=1 sentence.\n\n"
-        "Guidance:\n"
-        "* supported: images clearly show the claimed damage.\n"
-        "* contradicted: images clearly show no damage OR a different issue "
-        "than claimed (still requires sufficient evidence).\n"
-        "* not_enough_information: images cannot be used to decide.\n"
-        "* Every supporting_image_id must be from the submitted list."
+        "=== DECISION RULES (follow exactly) ===\n"
+        "* supported: images clearly show the claimed damage type on the "
+        "claimed part.\n"
+        "* contradicted: images clearly show NO damage OR a different issue "
+        "than claimed (requires sufficient evidence to be sure).\n"
+        "* not_enough_information: images cannot be used to decide.\n\n"
+        "=== ANTI-HALLUCINATION ===\n"
+        "* Report ONLY what is visible in the images. Never invent damage, "
+        "parts, issue types, or severity.\n"
+        "* If uncertain between supported/contradicted, prefer "
+        "not_enough_information rather than guessing.\n"
+        "* Every supporting_image_id MUST come from the submitted list.\n"
+        "* History risk is context only; it must NEVER change claim_status."
     )
