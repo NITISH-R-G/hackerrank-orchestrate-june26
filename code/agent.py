@@ -87,13 +87,17 @@ def call_with_retry(fn, what: str = "model call"):
     """Call ``fn`` with retry on retryable errors (up to MAX_RETRIES attempts).
 
     Non-retryable errors propagate immediately. Raises the last error if all
-    attempts fail.
+    attempts fail. A DAILY-quota 429 is treated as non-retryable (it won't
+    recover within the retry window; rotation should handle it).
     """
     last_err = None
     for attempt in range(MAX_RETRIES):
         try:
             return fn()
         except Exception as err:  # noqa: BLE001 - filter below
+            # Daily-quota exhaustion: do not retry, let rotation handle it.
+            if is_daily_quota_429(err):
+                raise
             if not is_retryable(err):
                 raise
             last_err = err
@@ -113,13 +117,6 @@ def set_key_pool(pool: KeyPool) -> None:
     _key_pool = pool
 
 
-def _client_for_call():
-    """Return the current client: from the pool if set, else the legacy single."""
-    if _key_pool is not None and _key_pool.has_key():
-        return _key_pool.current()
-    return None  # callers pass an explicit client
-
-
 def call_with_rotation(make_call, what: str = "model call"):
     """Call make_call(client) with retry + key rotation on daily-quota 429.
 
@@ -128,8 +125,9 @@ def call_with_rotation(make_call, what: str = "model call"):
     """
     global _key_pool
     if _key_pool is None:
-        # No pool: legacy single-client path; caller's client is used via closure.
-        return call_with_retry(make_call, what=what)
+        # No pool: legacy single-client path. Build one client and use it.
+        client = build_client()
+        return call_with_retry(lambda: make_call(client), what=what)
 
     while _key_pool.has_key():
         client = _key_pool.current()
@@ -230,9 +228,8 @@ def _run_pass1(client, user_claim: str, claim_object: str) -> Dict:
         response_schema=ClaimIntentExtraction,
     )
 
-    def go():
+    def go(c):
         _throttle()
-        c = _client_for_call() or client
         resp = c.models.generate_content(
             model=MODEL_NAME, contents=user_p, config=cfg,
         )
@@ -274,9 +271,8 @@ def _run_pass2(client, *, claim_object, user_claim, claimed_damage_description,
         response_schema=ClaimAnalysis,
     )
 
-    def go():
+    def go(c):
         _throttle()
-        c = _client_for_call() or client
         resp = c.models.generate_content(
             model=MODEL_NAME, contents=contents, config=cfg,
         )
@@ -311,9 +307,8 @@ def _run_single_pass(client, *, claim_object, user_claim, evidence_requirement,
         response_schema=ClaimAnalysis,
     )
 
-    def go():
+    def go(c):
         _throttle()
-        c = _client_for_call() or client
         resp = c.models.generate_content(
             model=MODEL_NAME, contents=contents, config=cfg,
         )
