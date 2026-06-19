@@ -13,18 +13,18 @@ def test_calculate_accuracy():
     # Exactly matching lists
     expected = ["supported", "dent", "door", "true", "none"]
     predicted = ["supported", "dent", "door", "true", "none"]
-    assert calculate_accuracy(expected, predicted) == 1.0
+    assert calculate_accuracy(expected, predicted) == pytest.approx(1.0)
 
     # Partial match
     predicted_partial = ["supported", "scratch", "door", "false", "none"]
-    assert calculate_accuracy(expected, predicted_partial) == 3 / 5
+    assert calculate_accuracy(expected, predicted_partial) == pytest.approx(0.6)
 
     # Completely wrong
     predicted_wrong = ["contradicted", "scratch", "hood", "false", "unknown"]
-    assert calculate_accuracy(expected, predicted_wrong) == 0.0
+    assert calculate_accuracy(expected, predicted_wrong) == pytest.approx(0.0)
 
     # Empty lists
-    assert calculate_accuracy([], []) == 0.0
+    assert calculate_accuracy([], []) == pytest.approx(0.0)
 
     # Different lengths should raise ValueError
     with pytest.raises(ValueError):
