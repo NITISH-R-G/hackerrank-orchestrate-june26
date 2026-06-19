@@ -1,5 +1,6 @@
 """Tests for evaluation module."""
 import csv
+import pytest
 from evaluation.main import evaluate_predictions
 
 
@@ -29,7 +30,7 @@ def test_evaluate_predictions_empty_files(tmp_path):
 
     metrics = evaluate_predictions(pred_path, truth_path)
     assert metrics["total"] == 0
-    assert metrics["accuracy_claim_status"] == 0.0
+    assert metrics["accuracy_claim_status"] == pytest.approx(0.0)
 
 
 def test_evaluate_predictions_accuracy(tmp_path):
@@ -74,7 +75,7 @@ def test_evaluate_predictions_accuracy(tmp_path):
     assert metrics["correct_object_part"] == 2
     assert metrics["correct_severity"] == 2
 
-    assert metrics["accuracy_claim_status"] == 2 / 3
-    assert metrics["accuracy_issue_type"] == 3 / 3
-    assert metrics["accuracy_object_part"] == 2 / 3
-    assert metrics["accuracy_severity"] == 2 / 3
+    assert metrics["accuracy_claim_status"] == pytest.approx(2 / 3)
+    assert metrics["accuracy_issue_type"] == pytest.approx(1.0)
+    assert metrics["accuracy_object_part"] == pytest.approx(2 / 3)
+    assert metrics["accuracy_severity"] == pytest.approx(2 / 3)
