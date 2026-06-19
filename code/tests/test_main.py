@@ -6,7 +6,7 @@ import pytest
 import main
 
 
-def test_main_default_args(mocker):
+def test_main_default_args(mocker, caplog):
     """Test main() with default arguments successfully runs the pipeline."""
     mock_run_pipeline = mocker.patch("main.run_pipeline")
 
@@ -21,7 +21,7 @@ def test_main_default_args(mocker):
     assert "output_path" in kwargs
 
 
-def test_main_custom_args(mocker):
+def test_main_custom_args(mocker, caplog):
     """Test main() correctly parses custom input and output paths."""
     mock_run_pipeline = mocker.patch("main.run_pipeline")
 
@@ -53,7 +53,8 @@ def test_main_invalid_args(capsys):
     assert exit_code == 2
 
     captured = capsys.readouterr()
-    assert "unrecognized arguments: --unknown-arg" in captured.err
+    assert "unrecognized arguments" in captured.err
+    assert "--unknown-arg" in captured.err
 
 
 def test_main_exception_handling(mocker, caplog):

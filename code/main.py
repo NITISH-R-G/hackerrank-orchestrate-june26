@@ -6,7 +6,6 @@ input dataset to produce output predictions.
 import argparse
 import sys
 import logging
-from pathlib import Path
 
 # Adjust imports according to actual available modules (like config)
 try:
