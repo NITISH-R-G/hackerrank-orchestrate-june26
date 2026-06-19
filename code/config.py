@@ -16,7 +16,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 # --- Model / API behaviour ---
 MODEL_NAME = "gemini-2.5-flash"
 TEMPERATURE = 0
-SLEEP_BETWEEN_CALLS = 13.0  # seconds; free tier is 5 RPM for gemini-2.5-flash
+# Inter-call throttle. With a single key this must be ~13s to stay under the
+# 5 RPM free-tier limit. With a multi-key pool each key fires rarely, so this
+# can be lowered (env-overridable) to speed up large runs.
+SLEEP_BETWEEN_CALLS = float(os.getenv("SLEEP_BETWEEN_CALLS", "13.0"))
 MAX_RETRIES = 5
 
 # --- Filesystem layout ---

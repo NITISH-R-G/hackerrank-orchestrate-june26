@@ -82,6 +82,15 @@ def run_pipeline(claims_path: str, output_path: str, *, strategy: str = "two",
         import agent
         from data_loader import (get_user_history, compute_history_risk,
                                  get_evidence_requirement)
+        from keypool import build_pool
+        # Install the key pool so daily-quota 429s rotate across all keys.
+        try:
+            pool = build_pool()
+            agent.set_key_pool(pool)
+            logger.info("Key pool installed: %d keys (%d live).",
+                        len(pool), pool.live_count())
+        except Exception as err:
+            logger.warning("Could not build key pool (%s); single-key mode.", err)
 
         def _live_runner(row, history_risk, evidence_req):
             return agent.analyze_claim_by_strategy(
