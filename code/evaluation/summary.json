@@ -1,0 +1,156 @@
+{
+  "single": {
+    "per_field_accuracy": {
+      "claim_status": 0.85,
+      "issue_type": 0.45,
+      "object_part": 0.8,
+      "severity": 0.45,
+      "valid_image": 0.85,
+      "evidence_standard_met": 0.8
+    },
+    "mean_accuracy": 0.7000000000000001,
+    "overall_exact_match": 0.3,
+    "claim_status_prf": {
+      "supported": {
+        "precision": 0.8571428571428571,
+        "recall": 1.0,
+        "f1": 0.923076923076923,
+        "support": 12
+      },
+      "contradicted": {
+        "precision": 1.0,
+        "recall": 0.6,
+        "f1": 0.7499999999999999,
+        "support": 5
+      },
+      "not_enough_information": {
+        "precision": 0.6666666666666666,
+        "recall": 0.6666666666666666,
+        "f1": 0.6666666666666666,
+        "support": 3
+      },
+      "macro": {
+        "precision": 0.8412698412698413,
+        "recall": 0.7555555555555555,
+        "f1": 0.7799145299145298,
+        "support": -1
+      }
+    },
+    "confusion_matrix": {
+      "supported": {
+        "supported": 12,
+        "contradicted": 0,
+        "not_enough_information": 0
+      },
+      "contradicted": {
+        "supported": 1,
+        "contradicted": 3,
+        "not_enough_information": 1
+      },
+      "not_enough_information": {
+        "supported": 1,
+        "contradicted": 0,
+        "not_enough_information": 2
+      }
+    },
+    "field_error_counts": {
+      "claim_status": 3,
+      "issue_type": 11,
+      "object_part": 4,
+      "severity": 11,
+      "valid_image": 3,
+      "evidence_standard_met": 4
+    },
+    "n_rows": 20,
+    "stats": {
+      "pass1_calls": 0,
+      "pass2_calls": 20,
+      "cache_hits": 0,
+      "pass1_failures": 0,
+      "pass2_failures": 0,
+      "input_tokens": 2666,
+      "output_tokens": 327
+    },
+    "runtime_seconds": 48.5,
+    "avg_latency_seconds": 2.4,
+    "note": "Two-pass eval did not complete due to free-tier daily quota; single-pass results shown as proxy. Two-pass is used for output.csv (deterministic, targeted evidence)."
+  },
+  "two": {
+    "per_field_accuracy": {
+      "claim_status": 0.85,
+      "issue_type": 0.45,
+      "object_part": 0.8,
+      "severity": 0.45,
+      "valid_image": 0.85,
+      "evidence_standard_met": 0.8
+    },
+    "mean_accuracy": 0.7000000000000001,
+    "overall_exact_match": 0.3,
+    "claim_status_prf": {
+      "supported": {
+        "precision": 0.8571428571428571,
+        "recall": 1.0,
+        "f1": 0.923076923076923,
+        "support": 12
+      },
+      "contradicted": {
+        "precision": 1.0,
+        "recall": 0.6,
+        "f1": 0.7499999999999999,
+        "support": 5
+      },
+      "not_enough_information": {
+        "precision": 0.6666666666666666,
+        "recall": 0.6666666666666666,
+        "f1": 0.6666666666666666,
+        "support": 3
+      },
+      "macro": {
+        "precision": 0.8412698412698413,
+        "recall": 0.7555555555555555,
+        "f1": 0.7799145299145298,
+        "support": -1
+      }
+    },
+    "confusion_matrix": {
+      "supported": {
+        "supported": 12,
+        "contradicted": 0,
+        "not_enough_information": 0
+      },
+      "contradicted": {
+        "supported": 1,
+        "contradicted": 3,
+        "not_enough_information": 1
+      },
+      "not_enough_information": {
+        "supported": 1,
+        "contradicted": 0,
+        "not_enough_information": 2
+      }
+    },
+    "field_error_counts": {
+      "claim_status": 3,
+      "issue_type": 11,
+      "object_part": 4,
+      "severity": 11,
+      "valid_image": 3,
+      "evidence_standard_met": 4
+    },
+    "n_rows": 20,
+    "stats": {
+      "pass1_calls": 0,
+      "pass2_calls": 20,
+      "cache_hits": 0,
+      "pass1_failures": 0,
+      "pass2_failures": 0,
+      "input_tokens": 2666,
+      "output_tokens": 327
+    },
+    "runtime_seconds": 48.5,
+    "avg_latency_seconds": 2.4,
+    "note": "Two-pass eval did not complete due to free-tier daily quota; single-pass results shown as proxy. Two-pass is used for output.csv (deterministic, targeted evidence)."
+  },
+  "winner": "single",
+  "limit": null
+}
