@@ -208,8 +208,17 @@ def safe_default_analysis(history_risk: bool) -> Dict:
 # ---------------------------------------------------------------------------
 
 def _pil_to_png_bytes(img: Image.Image) -> bytes:
+    """Return image bytes for the model, downscaled to JPEG to fit Gemini's
+    upload deadline. (Raw PNGs of 7908x5931 caused 503 'Deadline expired'.)
+    Kept the name for minimal churn; output is JPEG. Cap longest edge ~1280.
+    """
+    max_edge = 1280
+    if max(img.size) > max_edge:
+        ratio = max_edge / max(img.size)
+        img = img.resize((max(1, int(img.size[0] * ratio)),
+                          max(1, int(img.size[1] * ratio))), Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="JPEG", quality=82, optimize=True)
     return buf.getvalue()
 
 
@@ -286,7 +295,7 @@ def _run_pass2(client, *, claim_object, user_claim, claimed_damage_description,
         png = _pil_to_png_bytes(img)
         from image_utils import image_hash
         img_hashes.append(image_hash(png))
-        contents.append(types.Part.from_bytes(data=png, mime_type="image/png"))
+        contents.append(types.Part.from_bytes(data=png, mime_type="image/jpeg"))
 
     cfg = types.GenerateContentConfig(
         temperature=TEMPERATURE,
@@ -323,7 +332,7 @@ def _run_single_pass(client, *, claim_object, user_claim, evidence_requirement,
     contents: List = [user_p]
     for _, img in images:
         png = _pil_to_png_bytes(img)
-        contents.append(types.Part.from_bytes(data=png, mime_type="image/png"))
+        contents.append(types.Part.from_bytes(data=png, mime_type="image/jpeg"))
     cfg = types.GenerateContentConfig(
         temperature=TEMPERATURE,
         system_instruction=SINGLE_PASS_SYSTEM,
